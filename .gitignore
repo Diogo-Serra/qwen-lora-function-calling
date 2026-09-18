@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.py[cod]
+output/
+src/model/*/
+src/data/raw/*
+!src/data/raw/.gitkeep
+!src/data/raw/README.md
