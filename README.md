@@ -42,7 +42,6 @@ qwen-lora-function-calling/
 │   ├── __main__.py       # entry point for `python -m src`
 │   ├── cli/              # menu.py - interactive terminal menu
 │   ├── evaluation/       # evaluate.py (single model), compare.py (all checkpoints)
-│   ├── publishing/       # huggingface.py - Hub upload helper
 │   ├── training/         # train.py, export_model.py
 │   ├── data/
 │   │   ├── raw/          # drop unconverted downloads here (untracked)

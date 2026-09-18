@@ -55,7 +55,6 @@ def print_banner(title: str) -> None:
 
 @dataclass
 class SessionContext:
-    task: str = "Function selection"
     workflow: str = "Main menu"
     model: str | None = None
     dataset: Path | None = None
@@ -85,9 +84,7 @@ def relative(path: Path) -> str:
         return str(path)
 
 
-def short_value(value: Path | str | None, empty: str = "not selected") -> str:
-    if value is None:
-        return empty
+def short_value(value: Path | str) -> str:
     if isinstance(value, Path):
         return relative(value)
     candidate = Path(value)
@@ -97,23 +94,22 @@ def short_value(value: Path | str | None, empty: str = "not selected") -> str:
 
 
 def status_toolbar() -> str:
-    lines = [
-        f" Task: {SESSION.task} | Step: {SESSION.workflow}",
-        (
-            f" Model: {short_value(SESSION.model)} | "
-            f"Data: {short_value(SESSION.dataset)}"
-        ),
-        (
-            f" Session: {short_value(SESSION.run)} | "
-            f"State: {SESSION.checkpoint or 'not selected'}"
-        ),
+    """Recap only what has actually been picked so far; nothing pending."""
+    lines = [f" Step: {SESSION.workflow}"]
+    fields = [
+        ("Model", SESSION.model),
+        ("Dataset", SESSION.dataset),
+        ("Session", SESSION.run),
+        ("Checkpoint", SESSION.checkpoint),
+        ("Settings", SESSION.parameters),
+        ("Output", SESSION.output),
+        ("TensorBoard", SESSION.tensorboard_url),
     ]
-    if SESSION.parameters:
-        lines.append(f" Settings: {SESSION.parameters}")
-    if SESSION.output is not None:
-        lines.append(f" Output: {short_value(SESSION.output)}")
-    if SESSION.tensorboard_url:
-        lines.append(f" TensorBoard: {SESSION.tensorboard_url}")
+    for label, value in fields:
+        if value is None:
+            continue
+        display = value if label in ("Checkpoint", "Settings", "TensorBoard") else short_value(value)
+        lines.append(f" {label}: {display}")
     return "\n".join(lines)
 
 
@@ -167,17 +163,6 @@ def discover_models() -> list[Path]:
         if root.exists():
             candidates.extend(root.rglob("config.json"))
     return sorted({path.parent.resolve() for path in candidates})
-
-
-def discover_exported_models() -> list[Path]:
-    if not MODEL_OUTPUT_DIR.exists():
-        return []
-    return sorted(
-        {
-            config_path.parent.resolve()
-            for config_path in MODEL_OUTPUT_DIR.rglob("config.json")
-        }
-    )
 
 
 def discover_datasets() -> list[Path]:
@@ -626,69 +611,6 @@ def action_show_artifacts() -> None:
     print(f"Saved checkpoints: {len(checkpoints)}")
     print(f"Merged exports   : {export_root}")
     print("\nUse 'Export a trained model' for a standalone portable folder.")
-    print("Use 'Publish to Hugging Face' to upload an adapter or export.")
-
-
-def action_publish() -> None:
-    SESSION.begin("Publish to Hugging Face")
-    explain_action(
-        "Publish to Hugging Face Hub",
-        "Authentication must already be configured with `hf auth login`.",
-        "Review the generated model card and evaluation results before",
-        "publishing. No access token is requested or stored by this menu.",
-    )
-    artifact_type = ask_select(
-        "What do you want to publish?",
-        [
-            "LoRA adapter (small; requires the base model)",
-            "Merged model (large; standalone)",
-        ],
-    )
-    adapter_only = artifact_type == (
-        "LoRA adapter (small; requires the base model)"
-    )
-    if adapter_only:
-        model = select_model("Select the adapter's base model")
-        if not model:
-            return
-        folder = select_run(model)
-        SESSION.checkpoint = "final adapter"
-    elif artifact_type == "Merged model (large; standalone)":
-        folder = select_path(
-            "Select an exported model",
-            discover_exported_models(),
-            False,
-        )
-    else:
-        return
-    if folder is None:
-        return
-    SESSION.output = folder
-    repo_id = ask_text("Hugging Face repository (username/model-name):")
-    if not repo_id or "/" not in repo_id:
-        print("Repository ID must use the form username/model-name.")
-        return
-    private = questionary.confirm(
-        "Create or keep this repository private?",
-        default=True,
-        **prompt_options(),
-    ).ask()
-    command = module_command(
-        "src.publishing.huggingface",
-        "--folder",
-        folder,
-        "--repo_id",
-        repo_id,
-    )
-    if private:
-        command.append("--private")
-    if adapter_only:
-        command.append("--adapter_only")
-    visibility = "private" if private else "public"
-    artifact_label = "LoRA adapter" if adapter_only else "merged model"
-    SESSION.parameters = f"{visibility} repository; {artifact_label}"
-    SESSION.output = f"https://huggingface.co/{repo_id}"
-    run_command(command, "Upload the selected model artifact")
 
 
 def print_resources() -> None:
@@ -716,7 +638,6 @@ def interactive_menu() -> None:
         "locations": action_show_artifacts,
         "report": action_view_report,
         "export": action_export,
-        "publish": action_publish,
     }
     choices = [
         section("Training"),
@@ -731,7 +652,6 @@ def interactive_menu() -> None:
         section("Deployment"),
         Choice("Show artifact locations", "locations"),
         Choice("Export a standalone model", "export"),
-        Choice("Publish to Hugging Face", "publish"),
         Separator(),
         Choice("Exit", "exit"),
     ]
