@@ -17,7 +17,6 @@ SRC_DIR = PROJECT_ROOT / "src"
 DATA_DIR = SRC_DIR / "data"
 MODEL_DIR = SRC_DIR / "model"
 OUTPUT_DIR = PROJECT_ROOT / "output"
-DATASET_OUTPUT_DIR = OUTPUT_DIR / "datasets"
 RUNS_DIR = OUTPUT_DIR / "runs"
 MODEL_OUTPUT_DIR = OUTPUT_DIR / "models"
 EVALUATION_OUTPUT_DIR = OUTPUT_DIR / "evaluations"
@@ -182,11 +181,9 @@ def discover_exported_models() -> list[Path]:
 
 
 def discover_datasets() -> list[Path]:
-    candidates = []
-    for root in (DATA_DIR, DATASET_OUTPUT_DIR):
-        if root.exists():
-            candidates.extend(root.rglob("*.jsonl"))
-    return sorted({path.resolve() for path in candidates})
+    if not DATA_DIR.exists():
+        return []
+    return sorted({path.resolve() for path in DATA_DIR.rglob("*.jsonl")})
 
 
 def training_datasets() -> list[Path]:
