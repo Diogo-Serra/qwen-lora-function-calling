@@ -120,27 +120,31 @@ def prompt_options() -> dict:
     }
 
 
-def select_question(
-    message: str, choices: list, show_back: bool = True
-) -> questionary.Question:
+def ask_select(message: str, choices: list, show_back: bool = True):
+    """Ask an arrow-key select question; None means cancelled or 'Back'."""
     items = list(choices)
     if show_back:
         items.extend([Separator(), Choice("\u25c0 Back", BACK)])
-    footer = [Separator()]
-    footer.extend(
-        Separator(line) for line in status_toolbar().splitlines()
-    )
-    return questionary.select(
+    # questionary.select() already reserves "bottom_toolbar" internally
+    # (for its own validation messages), so the recap is printed above
+    # the prompt instead of passed in as a kwarg.
+    recap = status_toolbar()
+    if recap.strip():
+        questionary.print(recap, style="fg:#657b83")
+    selected = questionary.select(
         message,
-        choices=[*items, *footer],
+        choices=items,
         style=MENU_STYLE,
-    )
+    ).ask()
+    return None if selected in (None, BACK) else selected
 
 
-def ask_select(message: str, choices: list, show_back: bool = True):
-    """Ask a select question; None means cancelled or 'Back' was chosen."""
-    selected = select_question(message, choices, show_back).ask()
-    return None if selected == BACK else selected
+def ask_confirm(message: str, default: bool = True) -> bool | None:
+    return questionary.confirm(message, default=default, **prompt_options()).ask()
+
+
+def press_enter_to_continue(message: str = "Press any key to continue...") -> None:
+    questionary.press_any_key_to_continue(message, **prompt_options()).ask()
 
 
 def explain_action(title: str, *lines: str) -> None:
@@ -216,11 +220,7 @@ def discover_reports() -> list[Path]:
 
 
 def ask_text(message: str, default: str = "") -> str | None:
-    return questionary.text(
-        message,
-        default=default,
-        **prompt_options(),
-    ).ask()
+    return questionary.text(message, default=default, **prompt_options()).ask()
 
 
 def ask_number(
@@ -309,11 +309,7 @@ def run_command(command: list[str], description: str) -> bool:
     print(f"\nCurrent selection\n{status_toolbar()}")
     print(f"\n{description}")
     print(f"$ {shlex.join(command)}\n")
-    confirmed = questionary.confirm(
-        "Run this command?",
-        default=True,
-        **prompt_options(),
-    ).ask()
+    confirmed = ask_confirm("Run this command?", default=True)
     if not confirmed:
         return False
     try:
@@ -340,8 +336,10 @@ def action_train() -> None:
         "own adapter, configuration, epoch checkpoints, and TensorBoard logs.",
     )
     model = select_model("Select the base model to fine-tune")
+    if not model:
+        return
     dataset = select_path("Select the training dataset", training_datasets())
-    if not model or dataset is None:
+    if dataset is None:
         return
     SESSION.dataset = dataset
     default_name = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
@@ -381,11 +379,7 @@ def action_train() -> None:
         "--seed",
         seed,
     )
-    if questionary.confirm(
-        "Configure sequence length and validation split?",
-        default=False,
-        **prompt_options(),
-    ).ask():
+    if ask_confirm("Configure sequence length and validation split?", default=False):
         max_length = ask_number("Maximum sequence length:", "256")
         eval_ratio = ask_number("Validation ratio:", "0.2", float)
         if not max_length or not eval_ratio:
@@ -427,11 +421,13 @@ def action_evaluate() -> None:
         "final adapter, or one checkpoint from a training session.",
     )
     model = select_model("Select the base model")
+    if not model:
+        return
     test_file = select_path(
         "Select the evaluation dataset",
         evaluation_datasets(),
     )
-    if not model or test_file is None:
+    if test_file is None:
         return
     SESSION.dataset = test_file
     target = ask_select(
@@ -473,12 +469,16 @@ def action_compare() -> None:
         "checkpoint, and the final adapter, then writes comparison.json.",
     )
     model = select_model("Select the base model")
+    if not model:
+        return
     run_dir = select_run(model)
+    if run_dir is None:
+        return
     test_file = select_path(
         "Select the evaluation dataset",
         evaluation_datasets(),
     )
-    if not model or run_dir is None or test_file is None:
+    if test_file is None:
         return
     SESSION.dataset = test_file
     SESSION.checkpoint = "all checkpoints"
@@ -551,8 +551,10 @@ def action_export() -> None:
         "larger, but can be copied and loaded without the separate adapter.",
     )
     model = select_model("Select the base model")
+    if not model:
+        return
     run_dir = select_run(model)
-    if not model or run_dir is None:
+    if run_dir is None:
         return
     selected = select_adapter(run_dir)
     if selected is None:
@@ -656,20 +658,14 @@ def interactive_menu() -> None:
         Choice("Exit", "exit"),
     ]
     while True:
+        SESSION.begin("Main menu")
         print_banner("Local LLM Fine-tuning Lab")
-        selection = select_question(
-            "Choose a workflow",
-            choices,
-            show_back=False,
-        ).ask()
+        selection = ask_select("Choose a workflow", choices, show_back=False)
         if selection in (None, "exit"):
             print("Goodbye.")
             return
         actions[selection]()
-        questionary.press_any_key_to_continue(
-            "Press any key to return to the main menu",
-            **prompt_options(),
-        ).ask()
+        press_enter_to_continue("Press Enter to return to the main menu")
 
 
 def main() -> None:
