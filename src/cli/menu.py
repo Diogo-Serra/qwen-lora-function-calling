@@ -4,7 +4,6 @@ import re
 import shlex
 import subprocess
 import sys
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -46,35 +45,16 @@ def section(title: str) -> Separator:
     return Separator(f"\u2500\u2500 {title.upper()} \u2500\u2500")
 
 
+def clear_screen() -> None:
+    """Wipe the terminal so each menu/action always renders at the top."""
+    print("\033[2J\033[H", end="")
+
+
 def print_banner(title: str) -> None:
     rule = "\u2500" * (len(title) + 4)
     questionary.print(f"\n{rule}", style=BANNER_STYLE)
     questionary.print(f"  {title}", style=BANNER_STYLE)
     questionary.print(f"{rule}", style=BANNER_STYLE)
-
-
-@dataclass
-class SessionContext:
-    workflow: str = "Main menu"
-    model: str | None = None
-    dataset: Path | None = None
-    run: Path | None = None
-    checkpoint: str | None = None
-    parameters: str | None = None
-    output: Path | str | None = None
-    tensorboard_url: str | None = None
-
-    def begin(self, workflow: str) -> None:
-        self.workflow = workflow
-        self.model = None
-        self.dataset = None
-        self.run = None
-        self.checkpoint = None
-        self.parameters = None
-        self.output = None
-
-
-SESSION = SessionContext()
 
 
 def relative(path: Path) -> str:
@@ -84,40 +64,8 @@ def relative(path: Path) -> str:
         return str(path)
 
 
-def short_value(value: Path | str) -> str:
-    if isinstance(value, Path):
-        return relative(value)
-    candidate = Path(value)
-    if candidate.exists():
-        return relative(candidate)
-    return value
-
-
-def status_toolbar() -> str:
-    """Recap only what has actually been picked so far; nothing pending."""
-    lines = [f" Step: {SESSION.workflow}"]
-    fields = [
-        ("Model", SESSION.model),
-        ("Dataset", SESSION.dataset),
-        ("Session", SESSION.run),
-        ("Checkpoint", SESSION.checkpoint),
-        ("Settings", SESSION.parameters),
-        ("Output", SESSION.output),
-        ("TensorBoard", SESSION.tensorboard_url),
-    ]
-    for label, value in fields:
-        if value is None:
-            continue
-        display = value if label in ("Checkpoint", "Settings", "TensorBoard") else short_value(value)
-        lines.append(f" {label}: {display}")
-    return "\n".join(lines)
-
-
 def prompt_options() -> dict:
-    return {
-        "style": MENU_STYLE,
-        "bottom_toolbar": status_toolbar,
-    }
+    return {"style": MENU_STYLE}
 
 
 def ask_select(message: str, choices: list, show_back: bool = True):
@@ -125,12 +73,6 @@ def ask_select(message: str, choices: list, show_back: bool = True):
     items = list(choices)
     if show_back:
         items.extend([Separator(), Choice("\u25c0 Back", BACK)])
-    # questionary.select() already reserves "bottom_toolbar" internally
-    # (for its own validation messages), so the recap is printed above
-    # the prompt instead of passed in as a kwarg.
-    recap = status_toolbar()
-    if recap.strip():
-        questionary.print(recap, style="fg:#657b83")
     selected = questionary.select(
         message,
         choices=items,
@@ -272,20 +214,15 @@ def select_model(message: str = "Select a model") -> str | None:
     selected = ask_select(message, choices)
     if selected == "custom":
         selected = ask_text("Model ID or path:")
-    if selected:
-        SESSION.model = selected
     return selected
 
 
 def select_run(base_model: str) -> Path | None:
-    selected = select_path(
+    return select_path(
         "Select a training session",
         discover_runs(base_model),
         False,
     )
-    if selected is not None:
-        SESSION.run = selected
-    return selected
 
 
 def select_adapter(run_dir: Path) -> tuple[str, Path] | None:
@@ -299,14 +236,10 @@ def select_adapter(run_dir: Path) -> tuple[str, Path] | None:
                (path.name, path))
         for path in checkpoints
     )
-    selected = ask_select("Select the model state to evaluate", choices)
-    if selected is not None:
-        SESSION.checkpoint = selected[0]
-    return selected
+    return ask_select("Select the model state to evaluate", choices)
 
 
 def run_command(command: list[str], description: str) -> bool:
-    print(f"\nCurrent selection\n{status_toolbar()}")
     print(f"\n{description}")
     print(f"$ {shlex.join(command)}\n")
     confirmed = ask_confirm("Run this command?", default=True)
@@ -329,7 +262,7 @@ def module_command(module: str, *arguments: object) -> list[str]:
 
 
 def action_train() -> None:
-    SESSION.begin("Train LoRA adapter")
+    clear_screen()
     explain_action(
         "Train a function-selection model",
         "The base model stays unchanged. Each training session receives its",
@@ -341,7 +274,6 @@ def action_train() -> None:
     dataset = select_path("Select the training dataset", training_datasets())
     if dataset is None:
         return
-    SESSION.dataset = dataset
     default_name = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     run_name = ask_text("Run name:", default_name)
     epochs = ask_number("Epochs:", "8")
@@ -356,12 +288,6 @@ def action_train() -> None:
         return
     model_runs_dir = RUNS_DIR / model_slug(model)
     run_dir = model_runs_dir / safe_run_name
-    SESSION.run = run_dir
-    SESSION.checkpoint = "new session"
-    SESSION.parameters = (
-        f"{epochs} epochs; batch {batch_size}; LR {learning_rate}; seed {seed}"
-    )
-    SESSION.output = run_dir
     command = module_command(
         "src.training.train",
         "--model_name",
@@ -392,9 +318,6 @@ def action_train() -> None:
                 eval_ratio,
             ]
         )
-        SESSION.parameters += (
-            f"; max length {max_length}; validation {eval_ratio}"
-        )
     if run_command(command, "Train a new LoRA adapter"):
         model_runs_dir.mkdir(parents=True, exist_ok=True)
         latest = model_runs_dir / "latest"
@@ -414,7 +337,7 @@ def action_train() -> None:
 
 
 def action_evaluate() -> None:
-    SESSION.begin("Evaluate model")
+    clear_screen()
     explain_action(
         "Evaluate exact-match accuracy",
         "Use the held-out test set to compare the untouched base model, a",
@@ -429,7 +352,6 @@ def action_evaluate() -> None:
     )
     if test_file is None:
         return
-    SESSION.dataset = test_file
     target = ask_select(
         "What should be evaluated?",
         ["Untouched base model", "Training run or checkpoint"],
@@ -442,7 +364,6 @@ def action_evaluate() -> None:
         test_file,
     )
     if target == "Untouched base model":
-        SESSION.checkpoint = "base model"
         report = EVALUATION_OUTPUT_DIR / model_slug(model) / "base.json"
     elif target == "Training run or checkpoint":
         run_dir = select_run(model)
@@ -456,13 +377,12 @@ def action_evaluate() -> None:
         command.extend(["--adapter_dir", adapter_dir])
     else:
         return
-    SESSION.output = report
     command.extend(["--output", report])
     run_command(command, "Evaluate exact-match function selection")
 
 
 def action_compare() -> None:
-    SESSION.begin("Compare checkpoints")
+    clear_screen()
     explain_action(
         "Compare one training session",
         "Runs the same held-out evaluation on the base model, every saved",
@@ -480,9 +400,6 @@ def action_compare() -> None:
     )
     if test_file is None:
         return
-    SESSION.dataset = test_file
-    SESSION.checkpoint = "all checkpoints"
-    SESSION.output = run_dir / "comparison.json"
     command = module_command(
         "src.evaluation.compare",
         "--base_model",
@@ -496,7 +413,7 @@ def action_compare() -> None:
 
 
 def action_tensorboard() -> None:
-    SESSION.begin("View training curves")
+    clear_screen()
     explain_action(
         "Open TensorBoard",
         "TensorBoard reads the selected session's logs and serves curves in",
@@ -511,8 +428,6 @@ def action_tensorboard() -> None:
     port = ask_number("TensorBoard port:", "6006")
     if not port:
         return
-    SESSION.tensorboard_url = f"http://localhost:{port}"
-    SESSION.output = run_dir / "logs"
     command = module_command(
         "tensorboard.main",
         "--logdir",
@@ -521,11 +436,10 @@ def action_tensorboard() -> None:
         port,
     )
     run_command(command, "Start TensorBoard; press Ctrl+C to return")
-    SESSION.tensorboard_url = None
 
 
 def action_view_report() -> None:
-    SESSION.begin("View saved report")
+    clear_screen()
     report = select_path(
         "Select a saved JSON report",
         discover_reports(),
@@ -533,7 +447,6 @@ def action_view_report() -> None:
     )
     if report is None:
         return
-    SESSION.output = report
     try:
         content = json.loads(report.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
@@ -544,7 +457,7 @@ def action_view_report() -> None:
 
 
 def action_export() -> None:
-    SESSION.begin("Export trained model")
+    clear_screen()
     explain_action(
         "Export a standalone model",
         "Merges one LoRA adapter into its base model. The exported folder is",
@@ -574,12 +487,11 @@ def action_export() -> None:
         "--output_dir",
         MODEL_OUTPUT_DIR / base_slug / Path(name).name,
     )
-    SESSION.output = MODEL_OUTPUT_DIR / base_slug / Path(name).name
     run_command(command, "Merge and export a standalone model")
 
 
 def action_show_artifacts() -> None:
-    SESSION.begin("Locate trained artifacts")
+    clear_screen()
     explain_action(
         "Locate a trained model",
         "Select a session and model state to display exact copyable paths.",
@@ -596,7 +508,6 @@ def action_show_artifacts() -> None:
     if selected is None:
         return
     state_name, adapter_dir = selected
-    SESSION.output = adapter_dir
     export_root = MODEL_OUTPUT_DIR / model_slug(model)
     checkpoints = list(run_dir.glob("checkpoint-*"))
 
@@ -658,7 +569,7 @@ def interactive_menu() -> None:
         Choice("Exit", "exit"),
     ]
     while True:
-        SESSION.begin("Main menu")
+        clear_screen()
         print_banner("Local LLM Fine-tuning Lab")
         selection = ask_select("Choose a workflow", choices, show_back=False)
         if selection in (None, "exit"):
